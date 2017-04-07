@@ -5,3 +5,241 @@
  */
 
 include_once 'libros.features.inc';
+
+/**
+ * Implements hook_help().
+ */
+function libros_help($path, $arg) {
+  switch ($path) {
+    case 'admin/help#user_login_redirect':
+      return '<p>' . t('This module provides redirects on login by role') . '</p>';
+  }
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function libros_form_alter(&$form, &$form_state, $form_id) {
+  if ($form_id === 'noticia_node_form') {
+    dpm($form);
+    $form['field_categoria_noticia'][LANGUAGE_NONE]['#title'] = t('Modified Title for categories');
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function libros_menu() {
+  $items = array();
+  $items['admin/config/people/user-login-redirect'] = array(
+    'title' => 'User login redirect config',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('libros_config_form'),
+    'access arguments' => array('configure login redirect'),
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function libros_permission() {
+  $permissions['configure login redirect'] = array(
+    'title' => t('Configure Settinsd for User Login redirect'),
+    'description' => t('Access to configure User Login redirect'),
+    'restrict access' => TRUE,
+  );
+  return $permissions;
+}
+
+/**
+ * Implements hook_user_login().
+ */
+function libros_user_login(&$edit, $account) {
+  $wrapper = entity_metadata_wrapper('user', $account);
+  $configured_roles = libros_get_all_data();
+  $user_roles = $wrapper->roles->value();
+  $roles_redirect = array();
+  foreach ($user_roles as $rid) {
+    if (!empty($configured_roles[$rid])) {
+      $roles_redirect[$rid] = array(
+        'weight' => $configured_roles[$rid]->weight,
+        'path' => $configured_roles[$rid]->path,
+      );
+    }
+  }
+  $role_weights = array();
+  foreach ($roles_redirect as $role) {
+    $role_weights[] = $role['weight'];
+  }
+  $min_weight = min($role_weights);
+  $redirect_path = '';
+  foreach ($roles_redirect as $role) {
+    if ($role['weight'] == $min_weight) {
+      $redirect_path = $role['path'];
+    }
+  }
+  $edit['redirect'] = $redirect_path;
+  unset($_GET['destination']);
+  drupal_static_reset('drupal_get_destination');
+  drupal_get_destination();
+}
+
+/**
+ * Configuration form.
+ */
+function libros_config_form($form, $form_state) {
+  $configured_roles = libros_get_all_data();
+  $roles = user_roles(TRUE);
+  foreach ($roles as $key => $value) {
+    $default_weight = '';
+    $default_path = '';
+    if (!empty($configured_roles[$key])) {
+      $default_weight = $configured_roles[$key]->weight;
+      $default_path = $configured_roles[$key]->path;
+    }
+    $form['roles_properties_fieldset_' . $key] = array(
+      '#type' => 'fieldset',
+      '#title' => t('@role_name role', array('@role_name' => $value)),
+      '#collapsible' => TRUE,
+      '#colapsed' => FALSE,
+    );
+    $form['roles_properties_fieldset_' . $key]['role_redirect_weight_' . $key] = array(
+      '#type' => 'weight',
+      '#title' => t('Weight for role @role', array('@role' => $value)),
+      '#default_value' => $default_weight,
+      '#description' => t('The lower weight, the more importance the role will have.'),
+    );
+    $form['roles_properties_fieldset_' . $key]['role_redirect_path_' . $key] = array(
+      '#type' => 'textfield',
+      '#title' => t('Redirect path for role', array('@role' => $value)),
+      '#default_value' => $default_path,
+    );
+  }
+  $form['submit_button'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save configuration'),
+  );
+  return $form;
+}
+
+/**
+ * Return all roles redirect into.
+ */
+function libros_get_all_data() {
+  $query = db_select('user_login_redirect', 'u')
+    ->fields('u', array('rid', 'path', 'weight'));
+  $result = $query->execute();
+  return $result->fetchAllAssoc('rid');
+}
+
+/**
+ * Insert Redirect Data.
+ */
+function libros_insert_data($rid, $weight, $path) {
+  $insert = db_insert('user_login_redirect')
+    ->fields(array(
+      'rid' => $rid,
+      'weight' => (int) $weight,
+      'path' => $path,
+    ))
+    ->execute();
+  return $insert;
+}
+
+/**
+ * Delete specific rid info.
+ */
+function libros_delete_data_by_rid($rid) {
+  $delete = db_delete('user_login_redirect')
+    ->condition('rid', '$rid')
+    ->execute();
+  return $delete;
+}
+
+/**
+ * Update specific rid info.
+ */
+function libros_update_data($rid, $weight, $path) {
+  $update = db_update('user_login_redirect')
+    ->fields(array(
+      'weight' => (int) $weight,
+      'path' => $path,
+    ))
+    ->condition('rid', $rid, '=')
+    ->execute();
+  return $update;
+}
+
+/**
+ * Retrive specific rid info.
+ */
+function libros_get_data_by_rid($rid) {
+  $query = db_select('user_login_redirect', 'u')
+    ->fields('u', array('path', 'weight'))
+    ->condition('rid', $rid, '=');
+  $result = $query->execute();
+  return $result->fetchAssoc();
+}
+
+/**
+ * Validate for libros_config_form.
+ */
+function libros_config_form_validate($form, &$form_state) {
+  $roles = user_roles(TRUE);
+  $data = $form_state['values'];
+  foreach ($roles as $key => $value) {
+    if (!empty($data['role_redirect_path_' . $key])) {
+      if (!valid_url($data['role_redirect_path_' . $key])) {
+        form_set_error('role_redirect_path_' . $key . '][', t('You must enter a relative path for the role @role', array('@role' => $value)));
+      }
+    }
+  }
+}
+
+/**
+ * User login redirect config form submit.
+ */
+function libros_config_form_submit($form, &$form_state) {
+  $roles = user_roles(TRUE);
+  foreach ($roles as $key => $value) {
+    if (!empty($form_state['values']['role_redirect_path_' . $key])) {
+      $redirect_data = libros_get_data_by_rid($key);
+      if (empty($redirect_data)) {
+        $weight = check_plain($form_state['values']['role_redirect_weight_' . $key]);
+        $path = $form_state['values']['role_redirect_path_' . $key];
+        $result = libros_insert_data($key, $weight, $path);
+        if (!is_null($result)) {
+          drupal_set_message(t('The configuration for the role "@role" has been saved.', array('@role' => $value)));
+        }
+        else {
+          drupal_set_message(t('There was an error and the configuration of the role "@role" could not be saved.', array('@role' => $value)), 'error');
+        }
+      }
+      elseif ($redirect_data['path'] != $form_state['values']['role_redirect_path_' . $key]
+      || $redirect_data['weight'] != $form_state['values']['role_redirect_weight_' . $key]) {
+        $weight = check_plain($form_state['values']['role_redirect_weight_' . $key]);
+        $path = $form_state['values']['role_redirect_path_' . $key];
+        $result = libros_update_data($key, $weight, $path);
+        if ($result) {
+          drupal_set_message(t('The configuration of the role "@role" has been updated correctly.', array('@role' => $value)));
+        }
+        else {
+          drupal_set_message(t('There was an error during the update, the configuration of the role "@role" could not be saved.', array('@role' => $value)), 'error');
+        }
+      }
+    }
+    else {
+      $redirect_data = libros_get_data_by_rid($key);
+      if (!empty($redirect_data) && $redirect_data['path']) {
+        $result = libros_delete_data_by_rid($key);
+        if ($result) {
+          drupal_set_message(t('The configuration of the role "@role" has been delete .', array('@role' => $value)));
+        }
+        else {
+          drupal_set_message(t('The configuration of the role "@role" could not be deleted.', array('@role' => $value)), 'error');
+        }
+      }
+    }
+  }
+}
